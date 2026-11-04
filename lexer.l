@@ -37,6 +37,7 @@ void print_error(int line, const char *error_type, const char *text) {
 int yywrap(void);
 %}
 
+%option caseless
 %x IN_COMMENT
 %x IN_STRING
 
@@ -44,7 +45,7 @@ int yywrap(void);
 ID      [a-zA-Z$#@_][a-zA-Z0-9$#@_]*
 
 /* Integer constants (decimal, octal, hex) */
-INT_CONST       0[xX][0-9a-fA-F]+|0[0-7]*|[1-9][0-9]*
+INT_CONST      [0-9]+
 
 BIN_CONST [01]+[Bb]
 
@@ -173,33 +174,86 @@ CHAR_CONST      '\'([^\'\\]|\\.)\''
 {BIN_CONST}     { print_token(line_count, "BIN_CONST", yytext); }
 {CPLX_CONST}    { print_token(line_count, "COMPLEX_CONST", yytext); }
 
+"declare"|"dcl"             { print_token(line_count, "KEYWORD_DECLARE", yytext); }
+"procedure"|"proc"          { print_token(line_count, "KEYWORD_PROCEDURE", yytext); }
+"options"                   { print_token(line_count, "KEYWORD_OPTIONS", yytext); }
+"main"                      { print_token(line_count, "KEYWORD_MAIN", yytext); }
+"recursive"                 { print_token(line_count, "KEYWORD_RECURSIVE", yytext); }
+"returns"                   { print_token(line_count, "KEYWORD_RETURNS", yytext); }
+"return"                    { print_token(line_count, "KEYWORD_RETURN", yytext); }
+"call"                      { print_token(line_count, "KEYWORD_CALL", yytext); }
+"end"                       { print_token(line_count, "KEYWORD_END", yytext); }
+
+"fixed"                     { print_token(line_count, "KEYWORD_FIXED", yytext); }
+"float"                     { print_token(line_count, "KEYWORD_FLOAT", yytext); }
+"binary"|"bin"              { print_token(line_count, "KEYWORD_BINARY", yytext); }
+"decimal"|"dec"             { print_token(line_count, "KEYWORD_DECIMAL", yytext); }
+"bit"                       { print_token(line_count, "KEYWORD_BIT", yytext); }
+"character"|"char"          { print_token(line_count, "KEYWORD_CHARACTER", yytext); }
+"complex"                   { print_token(line_count, "KEYWORD_COMPLEX", yytext); }
+"pointer"                   { print_token(line_count, "KEYWORD_POINTER", yytext); }
+"varying"                   { print_token(line_count, "KEYWORD_VARYING", yytext); }
+"initial"|"init"            { print_token(line_count, "KEYWORD_INITIAL", yytext); }
+
+"if"                        { print_token(line_count, "KEYWORD_IF", yytext); }
+"then"                      { print_token(line_count, "KEYWORD_THEN", yytext); }
+"else"                      { print_token(line_count, "KEYWORD_ELSE", yytext); }
+"do"                        { print_token(line_count, "KEYWORD_DO", yytext); }
+"while"                     { print_token(line_count, "KEYWORD_WHILE", yytext); }
+"until"                     { print_token(line_count, "KEYWORD_UNTIL", yytext); }
+"to"                        { print_token(line_count, "KEYWORD_TO", yytext); }
+"by"                        { print_token(line_count, "KEYWORD_BY", yytext); }
+"leave"                     { print_token(line_count, "KEYWORD_LEAVE", yytext); }
+"iterate"                   { print_token(line_count, "KEYWORD_ITERATE", yytext); }
+"select"                    { print_token(line_count, "KEYWORD_SELECT", yytext); }
+"when"                      { print_token(line_count, "KEYWORD_WHEN", yytext); }
+"otherwise"                 { print_token(line_count, "KEYWORD_OTHERWISE", yytext); }
+"go"                        { print_token(line_count, "KEYWORD_GO", yytext); }
+"goto"                      { print_token(line_count, "KEYWORD_GOTO", yytext); }
+
+"put"                       { print_token(line_count, "KEYWORD_PUT", yytext); }
+"get"                       { print_token(line_count, "KEYWORD_GET", yytext); }
+"skip"                      { print_token(line_count, "KEYWORD_SKIP", yytext); }
+"list"                      { print_token(line_count, "KEYWORD_LIST", yytext); }
+"edit"                      { print_token(line_count, "KEYWORD_EDIT", yytext); }
+
 {ID}                 { 
                         print_token(line_count, "IDENTIFIER", yytext); 
                         add_to_symbol_table(yytext); 
                      }
 
 
+
 .                    { print_token(line_count, "UNKNOWN", yytext); }
 %%
 
 void add_to_symbol_table(const char *name) {
-    Symbol *current = symbol_table_head;
+    //PL/I is case-insensitive
+    char *upper = strdup(name);
+    if (!upper) {
+        perror("Failed to allocate memory for symbol");
+        exit(1);
+    }
+    for (char *p = upper; *p; p++)
+        *p = toupper((unsigned char)*p);
 
     // Check if the symbol already exists to avoid duplicates
+    Symbol *current = symbol_table_head;
     while (current != NULL) {
-        if (strcmp(current->name, name) == 0) {
+        if (strcmp(current->name, upper) == 0) {
+            free(upper);
             return; // Already in the table
         }
         current = current->next;
     }
 
-    // If not found, create a new symbol and add it to the head of the list
+    // Not found: add it. The table takes ownership of the uppercase copy.
     Symbol *new_symbol = (Symbol *)malloc(sizeof(Symbol));
     if (!new_symbol) {
         perror("Failed to allocate memory for symbol");
         exit(1);
     }
-    new_symbol->name = strdup(name); // Use strdup to safely copy the identifier
+    new_symbol->name = upper;
     new_symbol->next = symbol_table_head;
     symbol_table_head = new_symbol;
 }
