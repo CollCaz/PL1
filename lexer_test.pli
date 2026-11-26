@@ -5,7 +5,6 @@
    string literals, bit/hex strings, operators, delimiters,
    labels, preprocessor statements, and spacing edge cases.
    ================================================================ */
-
 %PAGE;
 %DECLARE DEBUG FIXED;
 %DEBUG = 1;
@@ -165,6 +164,7 @@ HELPER: PROCEDURE(X, Y) RETURNS(FIXED BINARY(31));
    RETURN(RESULT);
 END HELPER;
 
+   /* this comment never closes                                    */
 /* ================================================================
    Recursive function
    ================================================================ */
@@ -176,33 +176,3 @@ FACTORIAL: PROCEDURE(N) RECURSIVE RETURNS(FIXED BINARY(31));
    ELSE
       RETURN(N * FACTORIAL(N - 1));
 END FACTORIAL;
-
-/* ================================================================
-   INTENTIONALLY INVALID TOKENS
-   Uncomment ONE line at a time to test your lexer's error handling.
-   ================================================================ */
-
-/* Unterminated string:
-   MSG = 'this string never ends;                                  */
-
-/* Unterminated comment (remove the closing marker on the line below):
-   /* this comment never closes                                    */
-
-/* Illegal characters:
-   I = J ~ K;
-   I = J ` K;
-   I = J \ K;
-   I = J ! K;                                                       */
-
-/* Malformed numbers:
-   I = 1.2.3;
-   I = 12E;
-   I = 1E+;
-   I = 0xFF;                                                        */
-
-/* Malformed bit / hex strings:
-   BITS = '1012'B;
-   HEXVAL = 'GHIJ'X;                                                */
-
-/* Identifier starting with a digit:
-   DCL 9LIVES FIXED;                                                */

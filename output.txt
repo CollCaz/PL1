@@ -1,0 +1,45 @@
+Parse error on line 180 near ';': syntax error
+Parsing failed, no AST generated.
+
+--- Symbol Table (Unique Identifiers) ---
+  N
+  FACTORIAL
+  RESULT
+  Y
+  X
+  ABS
+  TRIM
+  SUBSTR
+  LENGTH
+  MOD
+  MAX
+  HELPER
+  F
+  A
+  DONE
+  START_LOOP
+  A1B2C3
+  LONG_IDENTIFIER_WITH_UNDERSCORES_123
+  VALUE
+  LABEL_TXT
+  ID
+  REC
+  P
+  TABLE
+  Z
+  HEXVAL
+  BITS
+  MSG
+  NAME
+  @FLAG
+  $AMOUNT
+  TOTAL#
+  COUNTER_1
+  K
+  J
+  I
+  TESTPROG
+-----------------------------------------
+
+----------------------------------
+Total lines processed: 180

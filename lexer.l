@@ -2,19 +2,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <unistd.h>
+#include "parser.tab.h"
 
 /* For Windows compatibility, as unistd.h is not available */
 #define YY_NO_UNISTD_H 1
 
-// Define token names for printing
 int line_count = 1;
 int comment_start_line = 0;
 
 char string_buffer[4096];
 char *string_buffer_ptr;
 
-// Symbol table implementation (simple linked list)
 typedef struct Symbol {
     char *name;
     struct Symbol *next;
@@ -24,8 +24,8 @@ Symbol *symbol_table_head = NULL;
 
 void add_to_symbol_table(const char *name);
 void print_symbol_table(void);
+void free_symbol_table(void);
 
-// Updated to print line numbers
 void print_token(int line, const char *token_type, const char *text) {
     printf("L%-4d %-25s : %s\n", line, token_type, text);
 }
@@ -34,6 +34,9 @@ void print_error(int line, const char *error_type, const char *text) {
     fprintf(stderr, "Error on line %d: %s %s\n", line, error_type, text);
 }
 
+// forward declaration for the parser
+void yyerror(const char *s);
+
 int yywrap(void);
 %}
 
@@ -41,64 +44,18 @@ int yywrap(void);
 %x IN_COMMENT
 %x IN_STRING
 
-/*Define regex for identifier */
 ID      [a-zA-Z$#@_][a-zA-Z0-9$#@_]*
 
-/* Integer constants (decimal, octal, hex) */
 INT_CONST      [0-9]+
 
 BIN_CONST [01]+[Bb]
 
-/* Floating constants (simplified)*/
 EXP             [eE][+-]?[0-9]+
 FLOAT_CONST     ([0-9]*\.[0-9]+|[0-9]+\.){EXP}?|[0-9]+{EXP}
 CPLX_CONST      ({FLOAT_CONST}|[0-9]+)[iI]
 
-/* Character constants (simple)*/
 CHAR_CONST      '\'([^\'\\]|\\.)\''
 
-%{
-/* ====================================================================
- * LEXER TODO LIST  (test file: lexer_test.pli)
- * ====================================================================
- *
- * --- Must fix (seen in latest output) ---
- * TODO: add char string rule, quote-doubling handled: '([^'\n]|'')*'
- * TODO: add bit string rule '...'B and hex string rule '...'X
- * TODO: add unterminated string error rule
- * TODO: verify fake comment inside a string (line 56) survives once strings match first
- * TODO: add leading-dot float rule (.5 currently lexes as PUNC_DOT + INT_CONST)
- * TODO: add binary constant rule (1010B, 11111111B)
- * TODO: add complex constant rule (4.0I, 2I)
- * TODO: add ^=, ^<, ^> and ^ rules to mirror the existing not-sign rules
- * TODO: add case-insensitive keyword table, emit KEYWORD instead of IDENTIFIER
- * TODO: add only non-keywords to the symbol table
- *
- * --- Cleanup ---
- * TODO: rename OP_BITWISE_AND / OP_BITWISE_OR to OP_AND / OP_OR
- * TODO: decide if built-ins (MAX, MOD, SUBSTR, LENGTH, TRIM, ABS) are keywords
- * TODO: decide if format items (A, F) are keywords
- * TODO: decide if 007 is INT_CONST or should be flagged
- *
- * --- Verify ---
- * TODO: re-run on lexer_test.pli, symbol table should hold only ~29 real names
- * TODO: check 'DEADBEEF'X and '00FF'X each give a single HEX_STRING token
- *
- * --- Error handling (uncomment invalid cases in test file one at a time) ---
- * TODO: unterminated string
- * TODO: unterminated comment
- * TODO: illegal characters (~ ` \ !)
- * TODO: malformed numbers (1.2.3, 12E, 1E+, 0xFF)
- * TODO: invalid bit string '1012'B and invalid hex string 'GHIJ'X
- * TODO: identifier starting with a digit (9LIVES)
- * TODO: errors report correct line number and lexing continues afterward
- *
- * --- Optional ---
- * TODO: report column numbers as well as line numbers
- * TODO: print token count summary by category
- * TODO: write expected-output files and diff against them automatically
- * ==================================================================== */
-%}
 %%
 \n                   { line_count++; } // Increment line counter
 [ \t\r]+             ;   // skip other whitespace
@@ -107,24 +64,27 @@ CHAR_CONST      '\'([^\'\\]|\\.)\''
 <IN_COMMENT>{
 "*/"                 { BEGIN(INITIAL); }
 \n                   { line_count++; }
-[^*\n]+              { /* eat comment text */ }
-"*"                  { /* lone star that isn't followed by / */ }
+[^*\n]+              {  }
+"*"                  {  }
 <<EOF>>              { print_error(comment_start_line,
                                    "Unterminated comment starting on line", "");
-                       return 0; }
+                       exit(0); }
 }
 
-\'[01]*\'[Bb]                    { print_token(line_count, "BIT_STRING", yytext); }
-\'[0-9A-Fa-f]*\'[Xx]             { print_token(line_count, "HEX_STRING", yytext); }
+\'[01]*\'[Bb]                    { yylval.str = strdup(yytext); return BIT_STRING; }
+\'[0-9A-Fa-f]*\'[Xx]             { yylval.str = strdup(yytext); return HEX_STRING; }
 
 \'           { 
     string_buffer_ptr = string_buffer; 
-    *string_buffer_ptr++ = '\''; /* Add opening quote */
+    *string_buffer_ptr++ = '\''; 
     *string_buffer_ptr = '\0'; 
     BEGIN(IN_STRING); 
 }
 <IN_STRING>{
-\'           { *string_buffer_ptr++ = '\''; /* Add closing quote */ *string_buffer_ptr = '\0'; print_token(line_count, "STRING_LITERAL", string_buffer); BEGIN(INITIAL); }
+\'           { *string_buffer_ptr++ = '\'';  *string_buffer_ptr = '\0';
+               BEGIN(INITIAL);
+               yylval.str = strdup(string_buffer);
+               return STRING_LITERAL; }
 
 ([^\\\'\n]+) { strcpy(string_buffer_ptr, yytext); string_buffer_ptr += yyleng; }
 \'\'         { strcpy(string_buffer_ptr, yytext); string_buffer_ptr += yyleng; }
@@ -134,101 +94,103 @@ CHAR_CONST      '\'([^\'\\]|\\.)\''
 }
 
 
-","                  { print_token(line_count, "PUNC_COMMA", yytext); }
-"."                  { print_token(line_count, "PUNC_DOT", yytext); }
-";"                  { print_token(line_count, "PUNC_SEMICOLON", yytext); }
-":"                  { print_token(line_count, "PUNC_COLON", yytext); }
-"("                  { print_token(line_count, "PUNC_LPAREN", yytext); }
-")"                  { print_token(line_count, "PUNC_RPAREN", yytext); }
-"%"                  { print_token(line_count, "PUNC_INDICATOR", yytext); }
-"->"                 { print_token(line_count, "PUNC_LOCATOR", yytext); }
-"=>"                 { print_token(line_count, "PUNC_LOCATOR", yytext); }
+"%"[^\n]*           ;
+
+","                  { return ','; }
+"."                  { return '.'; }
+";"                  { return ';'; }
+":"                  { return ':'; }
+"("                  { return '('; }
+")"                  { return ')'; }
+"->"                 { return ARROW; }
+"=>"                 { return ARROW; }
 
 
-"+"                  { print_token(line_count, "OP_PLUS", yytext); }
-"-"                  { print_token(line_count, "OP_MINUS", yytext); }
-"**"                 { print_token(line_count, "OP_EXPONENTIATE", yytext); }
-"*"                  { print_token(line_count, "OP_MULTIPLY", yytext); }
-"/"                  { print_token(line_count, "OP_DIVIDE", yytext); }
+"+"                  { return '+'; }
+"-"                  { return '-'; }
+"**"                 { return OP_EXPONENT; }
+"*"                  { return '*'; }
+"/"                  { return '/'; }
 
-"¬="                 { print_token(line_count, "OP_NE", yytext); }
-"<>"                 { print_token(line_count, "OP_NE", yytext); }
-"¬<"                 { print_token(line_count, "OP_NLT", yytext); }
-"¬>"                 { print_token(line_count, "OP_NGT", yytext); }
-"<="                 { print_token(line_count, "OP_LE", yytext); }
-">="                 { print_token(line_count, "OP_GE", yytext); }
-"="                  { print_token(line_count, "OP_ASSIGN", yytext); }
-"<"                  { print_token(line_count, "OP_LT", yytext); }
-">"                  { print_token(line_count, "OP_GT", yytext); }
+"¬="                 { return OP_NE; }
+"<>"                 { return OP_NE; }
+"¬<"                 { return OP_NLT; }
+"¬>"                 { return OP_NGT; }
+"<="                 { return OP_LE; }
+">="                 { return OP_GE; }
+"="                  { return '='; }
+"<"                  { return '<'; }
+">"                  { return '>'; }
 
-"||"                 { print_token(line_count, "OP_STRING_CONCAT", yytext); }
+"||"                 { return OP_CONCAT; }
 
-"¬"                  { print_token(line_count, "OP_LOGICAL_NOT", yytext); }
-"&"                  { print_token(line_count, "OP_BITWISE_AND", yytext); }
-"|"                  { print_token(line_count, "OP_BITWISE_OR", yytext); }
+"¬"                  { return OP_NOT; }
+"&"                  { return '&'; }
+"|"                  { return '|'; }
 
 
-{INT_CONST}          { print_token(line_count, "INT_CONST", yytext); }
-{FLOAT_CONST}        { print_token(line_count, "FLOAT_CONST", yytext); }
-{CHAR_CONST}         { print_token(line_count, "CHAR_CONST", yytext); }
-{BIN_CONST}     { print_token(line_count, "BIN_CONST", yytext); }
-{CPLX_CONST}    { print_token(line_count, "COMPLEX_CONST", yytext); }
+{INT_CONST}          { yylval.str = strdup(yytext); return INT_CONST; }
+{FLOAT_CONST}        { yylval.str = strdup(yytext); return FLOAT_CONST; }
+{CHAR_CONST}         { yylval.str = strdup(yytext); return CHAR_CONST; }
+{BIN_CONST}     { yylval.str = strdup(yytext); return BIN_CONST; }
+{CPLX_CONST}    { yylval.str = strdup(yytext); return COMPLEX_CONST; }
+[0-9]+{ID}           { yyerror("Invalid identifier or number"); }
 
-"declare"|"dcl"             { print_token(line_count, "KEYWORD_DECLARE", yytext); }
-"procedure"|"proc"          { print_token(line_count, "KEYWORD_PROCEDURE", yytext); }
-"options"                   { print_token(line_count, "KEYWORD_OPTIONS", yytext); }
-"main"                      { print_token(line_count, "KEYWORD_MAIN", yytext); }
-"recursive"                 { print_token(line_count, "KEYWORD_RECURSIVE", yytext); }
-"returns"                   { print_token(line_count, "KEYWORD_RETURNS", yytext); }
-"return"                    { print_token(line_count, "KEYWORD_RETURN", yytext); }
-"call"                      { print_token(line_count, "KEYWORD_CALL", yytext); }
-"end"                       { print_token(line_count, "KEYWORD_END", yytext); }
+"declare"|"dcl"             { return KEYWORD_DECLARE; }
+"procedure"|"proc"          { return KEYWORD_PROCEDURE; }
+"options"                   { return KEYWORD_OPTIONS; }
+"main"                      { return KEYWORD_MAIN; }
+"recursive"                 { return KEYWORD_RECURSIVE; }
+"returns"                   { return KEYWORD_RETURNS; }
+"return"                    { return KEYWORD_RETURN; }
+"call"                      { return KEYWORD_CALL; }
+"end"                       { return KEYWORD_END; }
 
-"fixed"                     { print_token(line_count, "KEYWORD_FIXED", yytext); }
-"float"                     { print_token(line_count, "KEYWORD_FLOAT", yytext); }
-"binary"|"bin"              { print_token(line_count, "KEYWORD_BINARY", yytext); }
-"decimal"|"dec"             { print_token(line_count, "KEYWORD_DECIMAL", yytext); }
-"bit"                       { print_token(line_count, "KEYWORD_BIT", yytext); }
-"character"|"char"          { print_token(line_count, "KEYWORD_CHARACTER", yytext); }
-"complex"                   { print_token(line_count, "KEYWORD_COMPLEX", yytext); }
-"pointer"                   { print_token(line_count, "KEYWORD_POINTER", yytext); }
-"varying"                   { print_token(line_count, "KEYWORD_VARYING", yytext); }
-"initial"|"init"            { print_token(line_count, "KEYWORD_INITIAL", yytext); }
+"fixed"                     { return KEYWORD_FIXED; }
+"float"                     { return KEYWORD_FLOAT; }
+"binary"|"bin"              { return KEYWORD_BINARY; }
+"decimal"|"dec"             { return KEYWORD_DECIMAL; }
+"bit"                       { return KEYWORD_BIT; }
+"character"|"char"          { return KEYWORD_CHARACTER; }
+"complex"                   { return KEYWORD_COMPLEX; }
+"pointer"                   { return KEYWORD_POINTER; }
+"varying"                   { return KEYWORD_VARYING; }
+"initial"|"init"            { return KEYWORD_INITIAL; }
 
-"if"                        { print_token(line_count, "KEYWORD_IF", yytext); }
-"then"                      { print_token(line_count, "KEYWORD_THEN", yytext); }
-"else"                      { print_token(line_count, "KEYWORD_ELSE", yytext); }
-"do"                        { print_token(line_count, "KEYWORD_DO", yytext); }
-"while"                     { print_token(line_count, "KEYWORD_WHILE", yytext); }
-"until"                     { print_token(line_count, "KEYWORD_UNTIL", yytext); }
-"to"                        { print_token(line_count, "KEYWORD_TO", yytext); }
-"by"                        { print_token(line_count, "KEYWORD_BY", yytext); }
-"leave"                     { print_token(line_count, "KEYWORD_LEAVE", yytext); }
-"iterate"                   { print_token(line_count, "KEYWORD_ITERATE", yytext); }
-"select"                    { print_token(line_count, "KEYWORD_SELECT", yytext); }
-"when"                      { print_token(line_count, "KEYWORD_WHEN", yytext); }
-"otherwise"                 { print_token(line_count, "KEYWORD_OTHERWISE", yytext); }
-"go"                        { print_token(line_count, "KEYWORD_GO", yytext); }
-"goto"                      { print_token(line_count, "KEYWORD_GOTO", yytext); }
+"if"                        { return KEYWORD_IF; }
+"then"                      { return KEYWORD_THEN; }
+"else"                      { return KEYWORD_ELSE; }
+"do"                        { return KEYWORD_DO; }
+"while"                     { return KEYWORD_WHILE; }
+"until"                     { return KEYWORD_UNTIL; }
+"to"                        { return KEYWORD_TO; }
+"by"                        { return KEYWORD_BY; }
+"leave"                     { return KEYWORD_LEAVE; }
+"iterate"                   { return KEYWORD_ITERATE; }
+"select"                    { return KEYWORD_SELECT; }
+"when"                      { return KEYWORD_WHEN; }
+"otherwise"                 { return KEYWORD_OTHERWISE; }
+"go"                        { return KEYWORD_GO; }
+"goto"                      { return KEYWORD_GOTO; }
 
-"put"                       { print_token(line_count, "KEYWORD_PUT", yytext); }
-"get"                       { print_token(line_count, "KEYWORD_GET", yytext); }
-"skip"                      { print_token(line_count, "KEYWORD_SKIP", yytext); }
-"list"                      { print_token(line_count, "KEYWORD_LIST", yytext); }
-"edit"                      { print_token(line_count, "KEYWORD_EDIT", yytext); }
+"put"                       { return KEYWORD_PUT; }
+"get"                       { return KEYWORD_GET; }
+"skip"                      { return KEYWORD_SKIP; }
+"list"                      { return KEYWORD_LIST; }
+"edit"                      { return KEYWORD_EDIT; }
 
 {ID}                 { 
-                        print_token(line_count, "IDENTIFIER", yytext); 
                         add_to_symbol_table(yytext); 
+                        yylval.str = strdup(yytext); return IDENTIFIER; 
                      }
 
 
 
-.                    { print_token(line_count, "UNKNOWN", yytext); }
+.                    { yyerror("Unknown character"); }
 %%
 
 void add_to_symbol_table(const char *name) {
-    //PL/I is case-insensitive
+    
     char *upper = strdup(name);
     if (!upper) {
         perror("Failed to allocate memory for symbol");
@@ -237,17 +199,17 @@ void add_to_symbol_table(const char *name) {
     for (char *p = upper; *p; p++)
         *p = toupper((unsigned char)*p);
 
-    // Check if the symbol already exists to avoid duplicates
+    
     Symbol *current = symbol_table_head;
     while (current != NULL) {
         if (strcmp(current->name, upper) == 0) {
             free(upper);
-            return; // Already in the table
+            return; 
         }
         current = current->next;
     }
 
-    // Not found: add it. The table takes ownership of the uppercase copy.
+    
     Symbol *new_symbol = (Symbol *)malloc(sizeof(Symbol));
     if (!new_symbol) {
         perror("Failed to allocate memory for symbol");
@@ -256,6 +218,17 @@ void add_to_symbol_table(const char *name) {
     new_symbol->name = upper;
     new_symbol->next = symbol_table_head;
     symbol_table_head = new_symbol;
+}
+
+void free_symbol_table(void) {
+    Symbol *current = symbol_table_head;
+    while (current) {
+        Symbol *next = current->next;
+        free(current->name);
+        free(current);
+        current = next;
+    }
+    symbol_table_head = NULL;
 }
 
 void print_symbol_table(void) {
@@ -271,30 +244,3 @@ void print_symbol_table(void) {
 int yywrap(void) {
     return 1; // Signal that there are no more files to process
 }
-
-int main(int argc, char **argv) {
-    if(argc < 2) {
-        fprintf(stderr,"Usage: %s <sourcefile.c>\n", argv[0]);
-        return 1;
-    }
-
-    FILE *file = fopen(argv[1], "r");
-    if(!file) {
-        perror("Cannot open input file");
-        return 1;
-    }
-
-    // Set flex input to the file
-    yyin = file;
-
-    // Perform lexical analysis
-    yylex();
-
-    print_symbol_table();
-
-    printf("\n----------------------------------\n");
-    printf("Total lines processed: %d\n", line_count);
-    fclose(file);
-    return 0;
-}
-
